@@ -62,10 +62,18 @@ class RNN(object):
         self.W_in = theano.shared(value=W_in_init, name='W_in')
 
         # hidden to output layer weights
-        W_out_init = np.asarray(np.random.uniform(size=(n_hidden, n_out),
+
+        ## for output 1
+        W_out1_init = np.asarray(np.random.uniform(size=(n_hidden, n_out),
                                                   low=-.01, high=.01),
-                                                  dtype=theano.config.floatX)
-        self.W_out = theano.shared(value=W_out_init, name='W_out')
+                                                  dtype=theano.config.floatX) 
+        self.W_out1 = theano.shared(value=W_out1_init, name='W_out1')
+
+        ## for output 2
+        W_out2_init = np.asarray(np.random.uniform(size=(n_hidden, n_out),
+                                                  low=-.01, high=.01),
+                                                  dtype=theano.config.floatX) 
+        self.W_out2 = theano.shared(value=W_out2_init, name='W_out2')
 
         h0_init = np.zeros((n_hidden,), dtype=theano.config.floatX)
         self.h0 = theano.shared(value=h0_init, name='h0')
@@ -73,11 +81,15 @@ class RNN(object):
         bh_init = np.zeros((n_hidden,), dtype=theano.config.floatX)
         self.bh = theano.shared(value=bh_init, name='bh')
 
-        by_init = np.zeros((n_out,), dtype=theano.config.floatX)
-        self.by = theano.shared(value=by_init, name='by')
+        by1_init = np.zeros((n_out,), dtype=theano.config.floatX)
+        self.by1 = theano.shared(value=by1_init, name='by1')
 
-        self.params = [self.W, self.W_in, self.W_out, self.h0,
-                       self.bh, self.by]
+        by2_init = np.zeros((n_out,), dtype=theano.config.floatX)
+        self.by2 = theano.shared(value=by1_init, name='by2')
+
+        ## TODO: Should h0 be a parameter
+        self.params = [self.W, self.W_in, self.W_out1, self.W_out2, self.h0,
+                       self.bh, self.by1, self.by2]
 
         # for every parameter, we maintain it's last update
         # the idea here is to use "momentum"
@@ -88,59 +100,77 @@ class RNN(object):
                             dtype=theano.config.floatX)
             self.updates[param] = theano.shared(init)
 
+        ## TODO: check if this construction works 
         # recurrent function (using tanh activation function) and linear output
         # activation function
         def step(x_t, h_tm1):
             h_t = self.activation(T.dot(x_t, self.W_in) + \
                                   T.dot(h_tm1, self.W) + self.bh)
-            y_t = T.dot(h_t, self.W_out) + self.by
-            return h_t, y_t
+            y1_t = T.dot(h_t, W_out1) + self.by1
+            y2_t = T.dot(h_t, W_out2) + self.by2
+            return h_t, y1_t, y2_t
 
         # the hidden state `h` for the entire sequence, and the output for the
         # entire sequence `y` (first dimension is always time)
-        [self.h, self.y_pred], _ = theano.scan(step,
+        [self.h, self.y1_pred, self.y2_pred], _ = theano.scan(step,
                                                sequences=self.input,
-                                               outputs_info=[self.h0, None])
+                                               outputs_info=[self.h0, None, None])
 
         # L1 norm ; one regularization option is to enforce L1 norm to
         # be small
-        self.L1 = 0
-        self.L1 += abs(self.W.sum())
-        self.L1 += abs(self.W_in.sum())
-        self.L1 += abs(self.W_out.sum())
+        ## TODO: Is there a bug here: the L-1 norm seems to be taking abs after summing, anyway first let me try L2 norm
+        ## TODO: why are the bias parameters not part of regularization term 
+        self.L1_out1 = 0
+        self.L1_out1 += abs(self.W.sum())
+        self.L1_out1 += abs(self.W_in.sum())
+        self.L1_out1 += abs(self.W_out1.sum())
+
+        self.L1_out2 = 0
+        self.L1_out2 += abs(self.W.sum())
+        self.L1_out2 += abs(self.W_in.sum())
+        self.L1_out2 += abs(self.W_out2.sum())
 
         # square of L2 norm ; one regularization option is to enforce
         # square of L2 norm to be small
-        self.L2_sqr = 0
-        self.L2_sqr += (self.W ** 2).sum()
-        self.L2_sqr += (self.W_in ** 2).sum()
-        self.L2_sqr += (self.W_out ** 2).sum()
+        self.L2_sqr_out1 = 0
+        self.L2_sqr_out1 += (self.W ** 2).sum()
+        self.L2_sqr_out1 += (self.W_in ** 2).sum()
+        self.L2_sqr_out1 += (self.W_out1 ** 2).sum()
 
-        if self.output_type == 'real':
-            self.loss = lambda y: self.mse(y)
-        elif self.output_type == 'binary':
-            # push through sigmoid
-            self.p_y_given_x = T.nnet.sigmoid(self.y_pred)  # apply sigmoid
-            self.y_out = T.round(self.p_y_given_x)  # round to {0,1}
-            self.loss = lambda y: self.nll_binary(y)
-        elif self.output_type == 'softmax':
+        self.L2_sqr_out2 = 0
+        self.L2_sqr_out2 += (self.W ** 2).sum()
+        self.L2_sqr_out2 += (self.W_in ** 2).sum()
+        self.L2_sqr_out2 += (self.W_out2 ** 2).sum()
+
+        #if self.output_type == 'real':
+        #    self.loss = lambda y: self.mse(y)
+        #elif self.output_type == 'binary':
+        #    # push through sigmoid
+        #    self.p_y_given_x = T.nnet.sigmoid(self.y_pred)  # apply sigmoid
+        #    self.y_out = T.round(self.p_y_given_x)  # round to {0,1}
+        #    self.loss = lambda y: self.nll_binary(y)
+        if self.output_type == 'softmax':
             # push through softmax, computing vector of class-membership
             # probabilities in symbolic form
-            self.p_y_given_x = self.softmax(self.y_pred)
+            self.p_y1_given_x = self.softmax(self.y1_pred)
+            self.p_y2_given_x = self.softmax(self.y2_pred)
 
             # compute prediction as class whose probability is maximal
-            self.y_out = T.argmax(self.p_y_given_x, axis=-1)
-            self.loss = lambda y: self.nll_multiclass(y)
+            self.y1_out = T.argmax(self.p_y1_given_x, axis=-1)
+            self.y2_out = T.argmax(self.p_y2_given_x, axis=-1)
+
+            # g stands for group of the example
+            self.loss = lambda y,g: self.nll_multiclass(y)
         else:
             raise NotImplementedError
 
-    def mse(self, y):
-        # error between output and target
-        return T.mean((self.y_pred - y) ** 2)
+    #def mse(self, y):
+    #    # error between output and target
+    #    return T.mean((self.y_pred - y) ** 2)
 
-    def nll_binary(self, y):
-        # negative log likelihood based on binary cross entropy error
-        return T.mean(T.nnet.binary_crossentropy(self.p_y_given_x, y))
+    #def nll_binary(self, y):
+    #    # negative log likelihood based on binary cross entropy error
+    #    return T.mean(T.nnet.binary_crossentropy(self.p_y_given_x, y))
 
     def nll_multiclass(self, y):
         # negative log likelihood based on multiclass cross entropy error
@@ -181,7 +211,7 @@ class RNN(object):
 
 
 class MetaRNN(BaseEstimator):
-    def __init__(self, n_in=5, n_hidden=50, n_out=5, learning_rate=0.01,
+    def __init__(self, n_in=5, n_hidden=50, n_out=5, n_groups=1, learning_rate=0.01,
                  n_epochs=100, L1_reg=0.00, L2_reg=0.00, learning_rate_decay=1,
                  activation='tanh', output_type='real',
                  final_momentum=0.9, initial_momentum=0.5,
@@ -190,6 +220,7 @@ class MetaRNN(BaseEstimator):
         self.n_in = int(n_in)
         self.n_hidden = int(n_hidden)
         self.n_out = int(n_out)
+        self.n_groups= int(n_groups)
         self.learning_rate = float(learning_rate)
         self.learning_rate_decay = float(learning_rate_decay)
         self.n_epochs = int(n_epochs)
@@ -208,11 +239,15 @@ class MetaRNN(BaseEstimator):
         # input (where first dimension is time)
         self.x = T.matrix()
         # target (where first dimension is time)
-        if self.output_type == 'real':
-            self.y = T.matrix(name='y', dtype=theano.config.floatX)
-        elif self.output_type == 'binary':
-            self.y = T.matrix(name='y', dtype='int32')
-        elif self.output_type == 'softmax':  # only vector labels supported
+        #if self.output_type == 'real':
+        #    self.y = T.matrix(name='y', dtype=theano.config.floatX)
+        #elif self.output_type == 'binary':
+        #    self.y = T.matrix(name='y', dtype='int32')
+        #elif self.output_type == 'softmax':  # only vector labels supported
+        #    self.y = T.vector(name='y', dtype='int32')
+        #else:
+        #    raise NotImplementedError
+        if self.output_type == 'softmax':  # only vector labels supported
             self.y = T.vector(name='y', dtype='int32')
         else:
             raise NotImplementedError
@@ -237,17 +272,17 @@ class MetaRNN(BaseEstimator):
                        activation=activation, output_type=self.output_type,
                        use_symbolic_softmax=self.use_symbolic_softmax)
 
-        if self.output_type == 'real':
-            self.predict = theano.function(inputs=[self.x, ],
-                                           outputs=self.rnn.y_pred,
-                                           mode=mode)
-        elif self.output_type == 'binary':
-            self.predict_proba = theano.function(inputs=[self.x, ],
-                                outputs=self.rnn.p_y_given_x, mode=mode)
-            self.predict = theano.function(inputs=[self.x, ],
-                                outputs=T.round(self.rnn.p_y_given_x),
-                                mode=mode)
-        elif self.output_type == 'softmax':
+        #if self.output_type == 'real':
+        #    self.predict = theano.function(inputs=[self.x, ],
+        #                                   outputs=self.rnn.y_pred,
+        #                                   mode=mode)
+        #elif self.output_type == 'binary':
+        #    self.predict_proba = theano.function(inputs=[self.x, ],
+        #                        outputs=self.rnn.p_y_given_x, mode=mode)
+        #    self.predict = theano.function(inputs=[self.x, ],
+        #                        outputs=T.round(self.rnn.p_y_given_x),
+        #                        mode=mode)
+        if self.output_type == 'softmax':
             self.predict_proba = theano.function(inputs=[self.x, ],
                         outputs=self.rnn.p_y_given_x, mode=mode)
             self.predict = theano.function(inputs=[self.x, ],
@@ -329,7 +364,7 @@ class MetaRNN(BaseEstimator):
         self.__setstate__(state)
         file.close()
 
-    def fit(self, X_train, Y_train, X_test=None, Y_test=None,
+    def fit(self, X_train, Y_train, G_train, X_test=None, Y_test=None, G_test=None,
             validation_frequency=100):
         """ Fit model
 
@@ -452,96 +487,96 @@ class MetaRNN(BaseEstimator):
             self.learning_rate *= self.learning_rate_decay
 
 
-def test_real():
-    """ Test RNN with real-valued outputs. """
-    n_hidden = 10
-    n_in = 5
-    n_out = 3
-    n_steps = 10
-    n_seq = 100
-
-    np.random.seed(0)
-    # simple lag test
-    seq = np.random.randn(n_seq, n_steps, n_in)
-    targets = np.zeros((n_seq, n_steps, n_out))
-
-    targets[:, 1:, 0] = seq[:, :-1, 3]  # delayed 1
-    targets[:, 1:, 1] = seq[:, :-1, 2]  # delayed 1
-    targets[:, 2:, 2] = seq[:, :-2, 0]  # delayed 2
-
-    targets += 0.01 * np.random.standard_normal(targets.shape)
-
-    model = MetaRNN(n_in=n_in, n_hidden=n_hidden, n_out=n_out,
-                    learning_rate=0.001, learning_rate_decay=0.999,
-                    n_epochs=400, activation='tanh')
-
-    model.fit(seq, targets, validation_frequency=1000)
-
-    plt.close('all')
-    fig = plt.figure()
-    ax1 = plt.subplot(211)
-    plt.plot(seq[0])
-    ax1.set_title('input')
-
-    ax2 = plt.subplot(212)
-    true_targets = plt.plot(targets[0])
-
-    guess = model.predict(seq[0])
-    guessed_targets = plt.plot(guess, linestyle='--')
-    for i, x in enumerate(guessed_targets):
-        x.set_color(true_targets[i].get_color())
-    ax2.set_title('solid: true output, dashed: model output')
-
-
-def test_binary(multiple_out=False, n_epochs=250):
-    """ Test RNN with binary outputs. """
-    n_hidden = 10
-    n_in = 5
-    if multiple_out:
-        n_out = 2
-    else:
-        n_out = 1
-    n_steps = 10
-    n_seq = 100
-
-    np.random.seed(0)
-    # simple lag test
-    seq = np.random.randn(n_seq, n_steps, n_in)
-    targets = np.zeros((n_seq, n_steps, n_out))
-
-    # whether lag 1 (dim 3) is greater than lag 2 (dim 0)
-    targets[:, 2:, 0] = np.cast[np.int](seq[:, 1:-1, 3] > seq[:, :-2, 0])
-
-    if multiple_out:
-        # whether product of lag 1 (dim 4) and lag 1 (dim 2)
-        # is less than lag 2 (dim 0)
-        targets[:, 2:, 1] = np.cast[np.int](
-            (seq[:, 1:-1, 4] * seq[:, 1:-1, 2]) > seq[:, :-2, 0])
-
-    model = MetaRNN(n_in=n_in, n_hidden=n_hidden, n_out=n_out,
-                    learning_rate=0.001, learning_rate_decay=0.999,
-                    n_epochs=n_epochs, activation='tanh', output_type='binary')
-
-    model.fit(seq, targets, validation_frequency=1000)
-
-    seqs = xrange(10)
-
-    plt.close('all')
-    for seq_num in seqs:
-        fig = plt.figure()
-        ax1 = plt.subplot(211)
-        plt.plot(seq[seq_num])
-        ax1.set_title('input')
-        ax2 = plt.subplot(212)
-        true_targets = plt.step(xrange(n_steps), targets[seq_num], marker='o')
-
-        guess = model.predict_proba(seq[seq_num])
-        guessed_targets = plt.step(xrange(n_steps), guess)
-        plt.setp(guessed_targets, linestyle='--', marker='d')
-        for i, x in enumerate(guessed_targets):
-            x.set_color(true_targets[i].get_color())
-        ax2.set_ylim((-0.1, 1.1))
-        ax2.set_title('solid: true output, dashed: model output (prob)')
+#def test_real():
+#    """ Test RNN with real-valued outputs. """
+#    n_hidden = 10
+#    n_in = 5
+#    n_out = 3
+#    n_steps = 10
+#    n_seq = 100
+#
+#    np.random.seed(0)
+#    # simple lag test
+#    seq = np.random.randn(n_seq, n_steps, n_in)
+#    targets = np.zeros((n_seq, n_steps, n_out))
+#
+#    targets[:, 1:, 0] = seq[:, :-1, 3]  # delayed 1
+#    targets[:, 1:, 1] = seq[:, :-1, 2]  # delayed 1
+#    targets[:, 2:, 2] = seq[:, :-2, 0]  # delayed 2
+#
+#    targets += 0.01 * np.random.standard_normal(targets.shape)
+#
+#    model = MetaRNN(n_in=n_in, n_hidden=n_hidden, n_out=n_out,
+#                    learning_rate=0.001, learning_rate_decay=0.999,
+#                    n_epochs=400, activation='tanh')
+#
+#    model.fit(seq, targets, validation_frequency=1000)
+#
+#    plt.close('all')
+#    fig = plt.figure()
+#    ax1 = plt.subplot(211)
+#    plt.plot(seq[0])
+#    ax1.set_title('input')
+#
+#    ax2 = plt.subplot(212)
+#    true_targets = plt.plot(targets[0])
+#
+#    guess = model.predict(seq[0])
+#    guessed_targets = plt.plot(guess, linestyle='--')
+#    for i, x in enumerate(guessed_targets):
+#        x.set_color(true_targets[i].get_color())
+#    ax2.set_title('solid: true output, dashed: model output')
+#
+#
+#def test_binary(multiple_out=False, n_epochs=250):
+#    """ Test RNN with binary outputs. """
+#    n_hidden = 10
+#    n_in = 5
+#    if multiple_out:
+#        n_out = 2
+#    else:
+#        n_out = 1
+#    n_steps = 10
+#    n_seq = 100
+#
+#    np.random.seed(0)
+#    # simple lag test
+#    seq = np.random.randn(n_seq, n_steps, n_in)
+#    targets = np.zeros((n_seq, n_steps, n_out))
+#
+#    # whether lag 1 (dim 3) is greater than lag 2 (dim 0)
+#    targets[:, 2:, 0] = np.cast[np.int](seq[:, 1:-1, 3] > seq[:, :-2, 0])
+#
+#    if multiple_out:
+#        # whether product of lag 1 (dim 4) and lag 1 (dim 2)
+#        # is less than lag 2 (dim 0)
+#        targets[:, 2:, 1] = np.cast[np.int](
+#            (seq[:, 1:-1, 4] * seq[:, 1:-1, 2]) > seq[:, :-2, 0])
+#
+#    model = MetaRNN(n_in=n_in, n_hidden=n_hidden, n_out=n_out,
+#                    learning_rate=0.001, learning_rate_decay=0.999,
+#                    n_epochs=n_epochs, activation='tanh', output_type='binary')
+#
+#    model.fit(seq, targets, validation_frequency=1000)
+#
+#    seqs = xrange(10)
+#
+#    plt.close('all')
+#    for seq_num in seqs:
+#        fig = plt.figure()
+#        ax1 = plt.subplot(211)
+#        plt.plot(seq[seq_num])
+#        ax1.set_title('input')
+#        ax2 = plt.subplot(212)
+#        true_targets = plt.step(xrange(n_steps), targets[seq_num], marker='o')
+#
+#        guess = model.predict_proba(seq[seq_num])
+#        guessed_targets = plt.step(xrange(n_steps), guess)
+#        plt.setp(guessed_targets, linestyle='--', marker='d')
+#        for i, x in enumerate(guessed_targets):
+#            x.set_color(true_targets[i].get_color())
+#        ax2.set_ylim((-0.1, 1.1))
+#        ax2.set_title('solid: true output, dashed: model output (prob)')
 
 
 def test_softmax(n_epochs=250):
@@ -552,11 +587,13 @@ def test_softmax(n_epochs=250):
     n_seq = 100
     n_classes = 3
     n_out = n_classes  # restricted to single softmax per time step
+    n_groups = 2
 
     np.random.seed(0)
     # simple lag test
     seq = np.random.randn(n_seq, n_steps, n_in)
-    targets = np.zeros((n_seq, n_steps), dtype=np.int)
+    targets = np.zeros((n_seq, n_groups, n_steps), dtype=np.int)
+    groups=np.random.random_integers(0,1,n_seq)
 
     thresh = 0.5
     # if lag 1 (dim 3) is greater than lag 2 (dim 0) + thresh
@@ -565,16 +602,20 @@ def test_softmax(n_epochs=250):
     # class 2
     # if lag 2(dim0) - thresh <= lag 1 (dim 3) <= lag2(dim0) + thresh
     # class 0
-    targets[:, 2:][seq[:, 1:-1, 3] > seq[:, :-2, 0] + thresh] = 1
-    targets[:, 2:][seq[:, 1:-1, 3] < seq[:, :-2, 0] - thresh] = 2
+    #targets[:, 2:][seq[:, 1:-1, 3] > seq[:, :-2, 0] + thresh] = 1
+    #targets[:, 2:][seq[:, 1:-1, 3] < seq[:, :-2, 0] - thresh] = 2
     #targets[:, 2:, 0] = np.cast[np.int](seq[:, 1:-1, 3] > seq[:, :-2, 0])
 
-    model = MetaRNN(n_in=n_in, n_hidden=n_hidden, n_out=n_out,
+    for i in xrange(n_seq): 
+        for j in xrange(n_groups): 
+            targets[i,j,:]=np.random.random_integers(0,2,n_steps)
+
+    model = MetaRNN(n_in=n_in, n_hidden=n_hidden, n_out=n_out, n_groups=n_groups,
                     learning_rate=0.001, learning_rate_decay=0.999,
                     n_epochs=n_epochs, activation='tanh',
                     output_type='softmax', use_symbolic_softmax=False)
 
-    model.fit(seq, targets, validation_frequency=1000)
+    model.fit(seq, targets, groups, validation_frequency=1000)
 
     seqs = xrange(10)
 

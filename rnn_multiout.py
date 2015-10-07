@@ -159,8 +159,7 @@ class RNN(object):
             self.y1_out = T.argmax(self.p_y1_given_x, axis=-1)
             self.y2_out = T.argmax(self.p_y2_given_x, axis=-1)
 
-            # g stands for group of the example
-            self.loss = lambda y,g: self.nll_multiclass(y)
+            self.loss = lambda y: self.nll_multiclass(y)
         else:
             raise NotImplementedError
 
